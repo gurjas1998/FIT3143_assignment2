@@ -25,11 +25,22 @@ int random_number(int min_num, int max_num);
 pthread_mutex_t g_Mutex = PTHREAD_MUTEX_INITIALIZER;
 int g_nslaves = 0;
 int finish = 0;
-//int pause ;
 bool skip = false;
 int masterSize;
 int *temp = NULL;
 time_t *timestamp = NULL;
+
+
+struct valuestruct { 
+	int temp;
+	int leftTemp;
+	int rightTemp;
+	int topTemp;
+	int bottomTemp;
+	int matches; 
+};
+
+
 
 int main(int argc, char **argv)
 {
@@ -96,6 +107,35 @@ int master_io(MPI_Comm world_comm, MPI_Comm comm)
 	int size;
 	MPI_Comm_size(world_comm, &size );
 	MPI_Comm_size(world_comm, &masterSize);
+	
+	
+	struct valuestruct values;
+	MPI_Datatype Valuetype;
+	MPI_Datatype type[6] = { MPI_INT,MPI_INT,MPI_INT,MPI_INT,MPI_INT,MPI_INT };
+	int blocklen[6] = { 1, 1,1,1,1,1};
+	MPI_Aint disp[6];
+
+	MPI_Get_address(&values.temp, &disp[0]);
+	MPI_Get_address(&values.leftTemp, &disp[1]);
+	MPI_Get_address(&values.rightTemp, &disp[2]);
+	MPI_Get_address(&values.topTemp, &disp[3]);
+	MPI_Get_address(&values.bottomTemp, &disp[4]);
+	MPI_Get_address(&values.matches, &disp[5]);
+
+	//Make relative
+	disp[5]=disp[5]-disp[0];
+	disp[4]=disp[4]-disp[0];
+	disp[3]=disp[3]-disp[0];
+	disp[2]=disp[2]-disp[0];
+	disp[1]=disp[1]-disp[0];
+	disp[0]=0;
+
+	// Create MPI struct
+	MPI_Type_create_struct(6, blocklen, disp, type, &Valuetype);
+	MPI_Type_commit(&Valuetype);
+	
+	
+	
 	g_nslaves = size - 1;
 	int low_num = 70, hi_num = 100;
     srand((unsigned)time(NULL)+((size-1)*masterSize));
@@ -124,7 +164,6 @@ int master_io(MPI_Comm world_comm, MPI_Comm comm)
         MPI_Status recieve_stauts;
         int flag =0;
         int fire_rank;
-		//MPI_Recv(&temperature, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status );
 		MPI_Irecv(&fire_rank, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &request );
 		while(!flag){
 		    MPI_Test(&request, &flag, &recieve_stauts);
@@ -133,52 +172,20 @@ int master_io(MPI_Comm world_comm, MPI_Comm comm)
 		}
 		if(!flag){
 		break;}
-		//MPI_Test(&request, &flag, &recieve_stauts);
-		//if(!flag){
-		//continue;}
-		
-		//MPI_Irecv(&temperature, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, world_comm, &request );
-		//MPI_Test(&request, &flag, &recieve_stauts);
-		//if(!flag){
-		//continue;}
-		//pause = 1;
 		skip = true;
 		printf("recieved request!!!!!!!!!!\n");
 		printf("rank : %d\n", fire_rank);
-		MPI_Recv(&temperature, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, world_comm, &status );
+		MPI_Recv(&values, 6, Valuetype, MPI_ANY_SOURCE, MPI_ANY_TAG, world_comm, &status );
+		temperature = values.temp;
 		printf("temperature : %d\n", temperature);
+		printf("right : %d\n",values.rightTemp);
+		printf("left: %d\n",values.leftTemp);
 		if(temperature <= temp[fire_rank] +5 && temperature >= temp[fire_rank] -5){
 	        printf("radar : %d \n", temp[fire_rank]);
 		    printf("FIRE !!!!!!!!!!");
 		}
-		//pause = 0;
 		skip = false;
-		//MPI_Barrier(world_comm); 
-		//pthread_mutex_lock(&g_Mutex);
-		/*switch (status.MPI_TAG) {
-			case TEMP_CHECK: 
-			{
-			    if(temperature <= temp[status.MPI_SOURCE] +5 && temperature >= temp[status.MPI_SOURCE] -5){
-			        printf("radar : %d \n", temp[status.MPI_SOURCE]);
-			        printf("FIRE !!!!!!!!!!");
-			    } 
-			    else{
-			        printf("FALSE FIRE :)");
-			    }
-			    break;
-			}
-			case MSG_EXIT:
-			{
-				finish = 1;
-				break;
-			}
-			default:
-			{
-				break;
-			}
-		}*/
-		//pthread_mutex_unlock(&g_Mutex);
-		//sleep(1);
+		
 	}
 	
 	MPI_Request end_request ;
@@ -209,28 +216,44 @@ int slave_io(MPI_Comm world_comm, MPI_Comm comm)
 	int nbr_j_lo, nbr_j_hi;
 	int wrap_around[ndims];
     int temp = -1;
-    //seed =  time(NULL) % (my_rank+2);
-    
-    
-	//temp = random_number(30,100);
-	
     MPI_Comm_size(world_comm, &masterSize); // size of the master communicator
   	MPI_Comm_size(comm, &size); // size of the slave communicator
 	MPI_Comm_rank(comm, &my_rank);  // rank of the slave communicator
 	dims[0]=dims[1]=0;
+	
+	
+	struct valuestruct values;
+	MPI_Datatype Valuetype;
+	MPI_Datatype type[6] = { MPI_INT,MPI_INT,MPI_INT,MPI_INT,MPI_INT,MPI_INT };
+	int blocklen[6] = { 1, 1,1,1,1,1};
+	MPI_Aint disp[6];
+
+	MPI_Get_address(&values.temp, &disp[0]);
+	MPI_Get_address(&values.leftTemp, &disp[1]);
+	MPI_Get_address(&values.rightTemp, &disp[2]);
+	MPI_Get_address(&values.topTemp, &disp[3]);
+	MPI_Get_address(&values.bottomTemp, &disp[4]);
+	MPI_Get_address(&values.matches, &disp[5]);
+
+	//Make relative
+	disp[5]=disp[5]-disp[0];
+	disp[4]=disp[4]-disp[0];
+	disp[3]=disp[3]-disp[0];
+	disp[2]=disp[2]-disp[0];
+	disp[1]=disp[1]-disp[0];
+	disp[0]=0;
+
+	// Create MPI struct
+	MPI_Type_create_struct(6, blocklen, disp, type, &Valuetype);
+	MPI_Type_commit(&Valuetype);
+	
+	
 	//sleep(my_rank);
 	int low_num = 70, hi_num = 100;
 	
-        //srand((unsigned)time(NULL)+((my_rank+1)*size));        
-        //temp = (rand() % (hi_num - low_num)) + low_num;
-    //sleep(my_rank);
 	srand((unsigned)time(NULL)+((my_rank+1)*size));
 	temp = (rand() % (hi_num - low_num)) + low_num;
     printf("temp %d\n",temp);
-    //low_num = temp -15;
-    //hi_num = temp+15;
-    //temp = (rand() % (hi_num - low_num)) + low_num;  
-    //printf("temp %d\n",temp);
 	MPI_Dims_create(size, ndims, dims);
     	if(my_rank==0)
 		printf("Slave Rank: %d. Comm Size: %d: Grid Dimension = [%d x %d] \n",my_rank,size,dims[0],dims[1]);
@@ -320,15 +343,24 @@ int slave_io(MPI_Comm world_comm, MPI_Comm comm)
 	            MPI_Isend(&my_rank, 1, MPI_INT, masterSize-1, TEMP_CHECK, world_comm,&sendRequest);
 	            MPI_Wait(&sendRequest,&sendStatus);
 	            printf("success sending to master\n");
-	            MPI_Send(&temp, 1, MPI_INT, masterSize-1, TEMP_CHECK, world_comm);
-	            // send message to master
-	            //MPI_Barrier(world_comm); 
+	            values.temp = temp;
+	            values.leftTemp = recvValL;
+	            values.rightTemp = recvValR;
+	            values.topTemp = recvValT;
+	            values.bottomTemp = recvValB;
+	            values.matches = inRange;
+	            MPI_Send(&values, 6, Valuetype, masterSize-1, TEMP_CHECK, world_comm);
 	        }
         }
-        low_num = temp -15, hi_num = temp+15;
-        //srand((unsigned)time(NULL)+((my_rank+1)*size));        
+        low_num = temp -15, hi_num = temp+15;       
         temp = (rand() % (hi_num - low_num)) + low_num;   
         MPI_Barrier(comm); 
+        if (!flag){
+            MPI_Test(&end_request, &flag, &end_status);
+	    }
+	    if (flag){
+            break;
+	    }
         sleep(2);
     }
     printf("rank : %d End\n", my_rank);
