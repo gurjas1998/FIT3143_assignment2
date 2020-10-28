@@ -17,6 +17,8 @@
 #define TEMP_REQUEST 1
 #define TEMP_CHECK 2
 
+int nrows, ncols;
+
 int master_io(MPI_Comm world_comm, MPI_Comm comm);
 int slave_io(MPI_Comm world_comm, MPI_Comm comm);
 void* ProcessFunc(void *pArg);
@@ -51,6 +53,17 @@ int main(int argc, char **argv)
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
     
+    if (argc == 3) {
+		nrows = atoi (argv[1]);
+		ncols = atoi (argv[2]);
+		if( (nrows*ncols) != size-1) {
+			if( rank ==0) printf("ERROR: nrows*ncols)=%d * %d = %d != %d\n", nrows, ncols, nrows*ncols,size);
+			MPI_Finalize(); 
+			return 0;
+		}
+	} else {
+		nrows=ncols=0;
+	}
     
     MPI_Comm_split( MPI_COMM_WORLD,rank == size-1, 0, &new_comm);
     if (rank == size-1) 
@@ -92,6 +105,7 @@ void* ProcessFunc(void *pArg) // Common function prototype
         sensorPos = random_number(0,masterSize-2);
         lastTemp = temp[sensorPos];
         temp[sensorPos] = random_number(lastTemp-10,lastTemp+10);
+        timestamp[sensorPos] = time(NULL);
         sleep(2);
     }
     
@@ -108,6 +122,7 @@ int master_io(MPI_Comm world_comm, MPI_Comm comm)
 	MPI_Comm_size(world_comm, &size );
 	MPI_Comm_size(world_comm, &masterSize);
 	
+	int iteration = 0;
 	
 	struct valuestruct values;
 	MPI_Datatype Valuetype;
@@ -134,21 +149,34 @@ int master_io(MPI_Comm world_comm, MPI_Comm comm)
 	MPI_Type_create_struct(6, blocklen, disp, type, &Valuetype);
 	MPI_Type_commit(&Valuetype);
 	
+	int m,n;
+	MPI_Request end_request ;
+	MPI_Status end_status;
+	//int flag = 0 ;
+	int end_message = 1;
+	FILE *pInfile; 
+	m = nrows;
+	n = ncols;
 	
 	
+	int *totalMessages = NULL;
 	g_nslaves = size - 1;
 	int low_num = 70, hi_num = 100;
     srand((unsigned)time(NULL)+((size-1)*masterSize));
 	temp = (int*)malloc(size * sizeof(int));
+	totalMessages = (int*)malloc(size * sizeof(int));
 	timestamp = (time_t*)malloc(size * sizeof(time_t));
 	
-	for(int i = 0; i < size-1; i++)
+	for(int i = 0; i < size-1; i++){
 		temp[i] = (rand() % (hi_num - low_num)) + low_num;
-	
+		timestamp[i] = time(NULL);
+		totalMessages[i]=0;
+	}
 	pthread_t tid;
 	pthread_mutex_init(&g_Mutex, NULL);
 	pthread_create(&tid, 0, ProcessFunc, NULL); // Create the thread
 	
+	pInfile = fopen("log.txt","w");
 	
 	time_t secs = 10; // 2 minutes (can be retrieved from user's input)
 
@@ -164,6 +192,7 @@ int master_io(MPI_Comm world_comm, MPI_Comm comm)
         MPI_Status recieve_stauts;
         int flag =0;
         int fire_rank;
+        int alertType;
 		MPI_Irecv(&fire_rank, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &request );
 		while(!flag){
 		    MPI_Test(&request, &flag, &recieve_stauts);
@@ -172,27 +201,61 @@ int master_io(MPI_Comm world_comm, MPI_Comm comm)
 		}
 		if(!flag){
 		break;}
+		iteration++;
+		totalMessages[fire_rank]++;
+		time_t alertTime = time(NULL);
+		
 		skip = true;
-		printf("recieved request!!!!!!!!!!\n");
-		printf("rank : %d\n", fire_rank);
 		MPI_Recv(&values, 6, Valuetype, MPI_ANY_SOURCE, MPI_ANY_TAG, world_comm, &status );
 		temperature = values.temp;
-		printf("temperature : %d\n", temperature);
-		printf("right : %d\n",values.rightTemp);
-		printf("left: %d\n",values.leftTemp);
 		if(temperature <= temp[fire_rank] +5 && temperature >= temp[fire_rank] -5){
-	        printf("radar : %d \n", temp[fire_rank]);
-		    printf("FIRE !!!!!!!!!!");
+		    alertType = 1;
 		}
+		else {
+		    alertType = 0;
+		}
+		time_t current_time;
+		char* c_time_string;
+		current_time = time(NULL);
+		c_time_string = ctime(&current_time);
+		fprintf(pInfile, "--------------------------------\n");
+		fprintf(pInfile, "Itereation : %d\n",iteration);
+		fprintf(pInfile, "Logged Time : %s\n",c_time_string);
+		c_time_string = ctime(&alertTime);
+		fprintf(pInfile, "Alert Reported Time : %s\n",c_time_string);
+		if(alertType == 1){
+		fprintf(pInfile, "Alert Type: True\n");
+		}
+		else{
+		fprintf(pInfile, "Alert Type: False\n");
+		}
+		fprintf(pInfile, "\nReporting Node\tCoord\tTemp\n");
+		fprintf(pInfile, "%d\t(%d,%d)\t%d\n",fire_rank,fire_rank/n,fire_rank%n,values.temp);
+		fprintf(pInfile, "\nAdjacent Node\tCoord\tTemp\n");
+		if((fire_rank%n)-1 >=0)
+		    fprintf(pInfile, "%d\t(%d,%d)\t%d\n",fire_rank-1,fire_rank/n,(fire_rank%n)-1,values.leftTemp);
+		if((fire_rank%n)+1 <m)
+		    fprintf(pInfile, "%d\t(%d,%d)\t%d\n",fire_rank+1,fire_rank/n,(fire_rank%n)+1,values.rightTemp);
+		if((fire_rank/n)-1 >=0)
+		    fprintf(pInfile, "%d\t(%d,%d)\t%d\n",fire_rank-n,(fire_rank/n)-1,fire_rank%n,values.topTemp);
+		if((fire_rank/n)+1 <n )
+		    fprintf(pInfile, "%d\t(%d,%d)\t%d\n",fire_rank+n,(fire_rank/n)+1,fire_rank%n,values.bottomTemp);
+		c_time_string = ctime(&timestamp[fire_rank]);
+		fprintf(pInfile, "\nInfrared Satellite Reporting Time (Celsius) : %s\n",c_time_string);
+		fprintf(pInfile, "Infrared Satellite Reporting (Celsius) : %d\n",temp[fire_rank]);
+		fprintf(pInfile, "Infrared Satellite Reporting Coord : (%d,%d)\n",fire_rank/n,fire_rank%n);
+		
+		fprintf(pInfile, "\nTotal Messages send between reporting node and base station : %d\n",totalMessages[fire_rank]);
+		fprintf(pInfile, "Number of adjacent matches to reporting node : %d\n",values.matches);
+		fprintf(pInfile, "--------------------------------\n");
 		skip = false;
 		
 	}
 	
-	MPI_Request end_request ;
-	MPI_Status end_status;
-	int flag = 0 ;
-	int end_message = 1;
+	
 	finish = 1;
+	fclose(pInfile); // close the file
+	pInfile = NULL;
 	MPI_Ibcast(&end_message, 1, MPI_INT, masterSize-1, world_comm, &end_request);
 	
 	MPI_Wait(&end_request, &end_status);
@@ -220,6 +283,7 @@ int slave_io(MPI_Comm world_comm, MPI_Comm comm)
   	MPI_Comm_size(comm, &size); // size of the slave communicator
 	MPI_Comm_rank(comm, &my_rank);  // rank of the slave communicator
 	dims[0]=dims[1]=0;
+	int m,n;
 	
 	
 	struct valuestruct values;
@@ -247,6 +311,10 @@ int slave_io(MPI_Comm world_comm, MPI_Comm comm)
 	MPI_Type_create_struct(6, blocklen, disp, type, &Valuetype);
 	MPI_Type_commit(&Valuetype);
 	
+	//MPI_Bcast(&m, 1, MPI_INT, masterSize-1, world_comm);
+	//MPI_Bcast(&n, 1, MPI_INT, masterSize-1, world_comm);
+	dims[0]=nrows;
+	dims[1]=ncols;
 	
 	//sleep(my_rank);
 	int low_num = 70, hi_num = 100;
@@ -254,6 +322,8 @@ int slave_io(MPI_Comm world_comm, MPI_Comm comm)
 	srand((unsigned)time(NULL)+((my_rank+1)*size));
 	temp = (rand() % (hi_num - low_num)) + low_num;
     printf("temp %d\n",temp);
+    
+    
 	MPI_Dims_create(size, ndims, dims);
     	if(my_rank==0)
 		printf("Slave Rank: %d. Comm Size: %d: Grid Dimension = [%d x %d] \n",my_rank,size,dims[0],dims[1]);
