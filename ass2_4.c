@@ -209,10 +209,9 @@ int master_io(MPI_Comm world_comm, MPI_Comm comm)
 	time_t secs = 10; // 2 minutes (can be retrieved from user's input)
 
     time_t startTime = time(NULL);
+    
+    // Allow the loop to run for certain amount of time
     while ((time(NULL) - startTime) < secs){
-		if(finish == 1){
-            break;
-        }
         
         int temperature;
         MPI_Request request;
@@ -222,30 +221,36 @@ int master_io(MPI_Comm world_comm, MPI_Comm comm)
         int fire_rank;
         int alertType;
         time_t node_to_base_start = time(NULL);
-        time_t node_to_base_end; 
+        time_t node_to_base_end;
+        // MPI_Irecv here checks to see if any node has issued a request 
 		MPI_Irecv(&fire_rank, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &request);
 		while(!flag){
 		    /* MPI_Test checks whether request has been received or not
 		       sets flag to true if yes */
-		    flag = 1;
-		    //MPI_Test(&request, &flag, &receive_status); 
+		    MPI_Test(&request, &flag, &receive_status); 
+		    
+		    /* If we've passed a certain amount of time and no request is received
+		       then we terminate the program */
 		    if((time(NULL) - startTime) > secs){
 		        break;
 		    }
             if(flag){
                 node_to_base_end = time(NULL);
+                //printf("Flag: %d\n", flag);
             }
 		}
 		if(!flag){
 		    break;
 		}
+		// Flag is true and we will write to file as we have received an alert
 		iteration++;
 		totalMessages[fire_rank]++;
 		time_t alertTime = time(NULL);
 		
 		skip = true;
-		MPI_Recv(&values, 6, Valuetype, MPI_ANY_SOURCE, MPI_ANY_TAG, world_comm, &status);
+		MPI_Recv(&values, 6, Valuetype, fire_rank, MPI_ANY_TAG, world_comm, &status);
 		temperature = values.temp;
+		printf("Current fire_rank: %d, temp: %d\n", fire_rank, temperature);
 		if(temperature <= temp[fire_rank] + 5 && temperature >= temp[fire_rank] - 5){
 		    /* If the received temperature is within +/- 5 of 'temp seen by satellite', then
 		       it is a real alert */
@@ -410,7 +415,7 @@ int slave_io(MPI_Comm world_comm, MPI_Comm comm)
             break;
 	    }
 	    count ++;
-	    printf("rank : %d , temp : %d temp\n", my_rank , temp);
+	    //printf("rank : %d , temp : %d temp\n", my_rank , temp);
 	    
 	    MPI_Request send_request[4];
         MPI_Request receive_request[4];
@@ -433,7 +438,7 @@ int slave_io(MPI_Comm world_comm, MPI_Comm comm)
 	    MPI_Waitall(4, send_request, send_status);
 	    MPI_Waitall(4, receive_request, receive_status);
 
-	    if(temp >= 70){
+	    if(temp >= 80){
 	        // Check if adjacent nodes have similar temperature
 	        int inRange = 0;
 	        if(recvValT >= temp -5 && recvValT <= temp+5){
@@ -451,7 +456,7 @@ int slave_io(MPI_Comm world_comm, MPI_Comm comm)
 	        
 	        // If at least 2 adjacent nodes have a similar temperature, send info to Master
 	        if(inRange >=2){
-	            printf("Rank : %d, temp > 80, sending to master\n", my_rank);
+	            printf("Rank : %d, temp : %d, sending to master\n", my_rank, temp);
 	            MPI_Request sendRequest;
 	            MPI_Status sendStatus;
 	            MPI_Isend(&my_rank, 1, MPI_INT, masterSize-1, TEMP_CHECK, world_comm, &sendRequest);
@@ -486,20 +491,3 @@ int slave_io(MPI_Comm world_comm, MPI_Comm comm)
     MPI_Comm_free( &comm2D );
 	return 0;
 }
-
-
-/*
-Is not specifying grid size supposed to make the program terminate?
-
-In master_io, why is MPI_Comm_size called twice using world_comm but stored in two different variables? around line 141
-
-What's the point in making addresses relative? Why not just store addresses as they are? line 162
-
-Is line 213 necessary? "if(finish == 1)" because finish = 1 isn't called until outside of the while loop.
-
-Have a look at node_to_base_time again, not sure if that's done properly. I think it should be time 
-since node sends the request through? That requires modifying the struct to send the time value over,
-not sure if that's possible to have an MPI datatype for time though
-
-Is line 435 meant to be "if(temp >= 80)"? instead of 70?
-*/
